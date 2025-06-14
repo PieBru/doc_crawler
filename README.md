@@ -3,24 +3,75 @@
 Documentattion web sites crawler, as per https://llmstxt.org specifications.
 License: Apache 2.0
 
-Large language models increasingly rely on website information, 
-but face a critical limitation: context windows are too small to handle
-most websites in their entirety. Converting complex HTML pages with navigation, 
-ads, and JavaScript into LLM-friendly plain text is both difficult and imprecise.
+## Introduction
 
-While websites serve both human readers and LLMs, the latter benefit from more 
-concise, expert-level information gathered in a single, accessible location. 
-This is particularly important for use cases like development environments, 
-where LLMs need quick access to programming documentation and APIs.
+Large language models increasingly rely on website information, but face a critical limitation: context windows are too small to handle most websites in their entirety. Converting complex HTML pages with navigation, ads, and JavaScript into LLM-friendly plain text is both difficult and imprecise.
 
-The "llms.txt" specification is a proposed standard for a text file placed on 
-websites to help large language models (LLMs) navigate and understand structured 
-content more effectively. It defines files like /llms.txt for a concise overview 
-of site navigation and /llms-full.txt for detailed content, aiming to provide AI 
-systems with curated paths to resources such as API documentation or product taxonomies.
-This specification addresses challenges in AI content processing by offering a 
-structured format that LLMs can parse to extract relevant information without needing 
-to crawl the entire site.
+While websites serve both human readers and LLMs, the latter benefit from more concise, expert-level information gathered in a single, accessible location. This is particularly important for use cases like development environments, where LLMs need quick access to programming documentation and  APIs.
+
+The "llms.txt" specification is a proposed standard for a text file placed on websites to help large language models (LLMs) navigate and understand structured content more effectively. It defines files like /llms.txt for a concise overview of site navigation and /llms-full.txt for detailed content, aiming to provide AI systems with curated paths to resources such as API documentation or product taxonomies.
+
+## Purpose
+
+This specification addresses challenges in AI content processing by offering a structured format that LLMs can parse to extract relevant information without needing to crawl the entire site.
+
+## Usage
+    ```
+    ❯ python crawler.py --help
+    usage: crawler.py [-h] [--version] [--log-level {NONE,DEBUG,INFO,WARNING,ERROR,CRITICAL}] --base-url BASE_URL --url-pattern URL_PATTERN
+                    [--output-file OUTPUT_FILE] [--output-file-full OUTPUT_FILE_FULL] [--output-type {txt,md,json,xml}] [--log-file LOG_FILE]
+                    [--user-agent USER_AGENT] [--request-delay REQUEST_DELAY] [--max-pages MAX_PAGES] [--retries RETRIES] [--excluded-url EXCLUDED_URL]
+                    --site-title SITE_TITLE [--site-summary SITE_SUMMARY] [--details-placeholder DETAILS_PLACEHOLDER] [--restart]
+                    [--skip-adjacent-repetitive-paths]
+
+    Crawl a documentation website to produce an llms.txt file.
+
+    options:
+    -h, --help            show this help message and exit
+    --version             show program's version number and exit
+    --log-level {NONE,DEBUG,INFO,WARNING,ERROR,CRITICAL}
+                            Set the logging level. (Currently only prints the selection)
+    --base-url BASE_URL   The root URL of the documentation to crawl (e.g., https://example.com/docs).
+    --url-pattern URL_PATTERN
+                            Regex pattern (as a string) to match documentation URLs (e.g., \"^https?://example\.com/docs/\").
+    --output-file OUTPUT_FILE
+                            Name for the llms.txt index file.
+    --output-file-full OUTPUT_FILE_FULL
+                            Name for the llms-full.txt content file.
+    --output-type {txt,md,json,xml}
+                            Desired output type. Affects default file extensions if --output-file/--output-file-full are not set. (Content generation for json/xml not yet implemented)
+    --log-file LOG_FILE   Name for the log file.
+    --user-agent USER_AGENT
+                            User-Agent string for crawling.
+    --request-delay REQUEST_DELAY
+                            Delay in seconds between requests.
+    --max-pages MAX_PAGES
+                            Maximum number of pages to crawl.
+    --retries RETRIES     Number of retries for fetching a page in case of an error.
+    --excluded-url EXCLUDED_URL
+                            URL pattern (supports wildcards like *) to exclude from crawling. Can be specified multiple times to exclude several patterns (e.g., --excluded-url "*/api/*" --excluded-url "*.pdf").
+    --site-title SITE_TITLE
+                            Site title for the H1 in generated files (e.g., "My Project Documentation").
+    --site-summary SITE_SUMMARY
+                            Site summary for the blockquote in llms.txt.
+    --details-placeholder DETAILS_PLACEHOLDER
+                            Text for the 'Optional details' section in llms.txt. If not set, this section will be empty.
+    --restart             Restart a previous crawl, skipping pages logged as 'Successfully fetched' in the existing log file.
+    --skip-adjacent-repetitive-paths
+                            Skip URLs with more than two adjacent identical path segments (e.g., /word/word/word/). Default: False
+
+    \
+        Example usage:
+        Crawl llmstxt.org (default configuration if these match):
+            crawler.py --base-url "https://llmstxt.org/" \\
+                    --url-pattern "^https?://llmstxt\.org/" \
+                    --site-title "LLMs.txt Project"
+
+        Crawl a different site:
+            crawler.py --base-url "https://docs.example.com/" \\
+                    --url-pattern "^https?://docs\.example\.com/" \
+                    --site-title "Example Docs" --output-file "example_llms.txt"
+    ```
 
 ### Examples
 
@@ -69,7 +120,7 @@ to crawl the entire site.
 
 *   **`llms-full.txt` (or as specified by `--output-file-full`)**:
 *   A comprehensive Markdown file containing the full content of discovered pages.
-    More details here: [What the heck is "llms-full.txt" ?](README_wth_is_llms-full.md)
+    More details here: [What is "llms-full.txt" ?](README_what_is_llms-full.md)
     ```markdown
     # [Site Title]
 

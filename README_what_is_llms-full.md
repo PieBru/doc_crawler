@@ -1,4 +1,4 @@
-# What the heck is "llms-full.txt" ?
+# What is "llms-full.txt" ?
 
 The "llms-full.txt" file format builds upon the "llms.txt" specifications by incorporating the full, detailed content of referenced pages into a single, consolidated Markdown file, rather than limiting it to curated links and summaries [What is LLMs.txt LLMs-Full.txt?](https://journal.withdaydream.com/p/what-is-llms-txt-llms-full-txt). This extension allows for direct access to comprehensive information, streamlining ingestion by large language models (LLMs) without requiring additional navigation [The value of llms.txt: Hype or real?](https://mintlify.com/blog/the-value-of-llms-txt-hype-or-real).
 
