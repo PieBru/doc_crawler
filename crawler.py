@@ -45,7 +45,8 @@ LLMS_TXT_DETAILS_PLACEHOLDER = (
 )
 REQUEST_DELAY_DEFAULT = 1  # Seconds between requests (avoid overloading servers)
 MAX_PAGES_DEFAULT = 1000 # Maximum number of pages to crawl
-REQUEST_RETRIES = 3  # Safety limit
+MAX_URL_LENGTH = 2000 # Define a reasonable max URL length
+SKIP_ADJACENT_REPETITIVE_PATHS_DEFAULT = False # Default for new feature
 REQUEST_RETRIES_DEFAULT = 3 # Number of retries for fetching a page
 
 # These will be populated by defaults or CLI arguments
@@ -58,7 +59,8 @@ LLMS_TXT_SITE_SUMMARY = LLMS_TXT_SITE_SUMMARY_DEFAULT # Ensure it's defined befo
 REQUEST_DELAY = REQUEST_DELAY_DEFAULT
 MAX_PAGES = MAX_PAGES_DEFAULT
 EXCLUDED_URLS = [] # Will be populated by CLI arguments
-# REQUEST_RETRIES is defined by CLI or its default in __main__
+SKIP_ADJACENT_REPETITIVE_PATHS = SKIP_ADJACENT_REPETITIVE_PATHS_DEFAULT
+REQUEST_RETRIES = REQUEST_RETRIES_DEFAULT # Initialized with default, overridden by CLI
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -181,6 +183,38 @@ def extract_links(html, base_url):
         abs_url = urljoin(base_url, href)
         abs_url = normalize_url(abs_url) # Normalize after resolving
         if URL_PATTERN.match(abs_url) and abs_url not in visited_urls:
+            # --- New: Check for >2 adjacent identical path segments (if enabled) ---
+            if SKIP_ADJACENT_REPETITIVE_PATHS:
+                path_segments_raw = urlparse(abs_url).path.strip('/').split('/')
+                # Filter out empty segments that might result from multiple slashes like // or leading/trailing slashes
+                path_segments = [segment for segment in path_segments_raw if segment]
+                if len(path_segments) >= 3: # Need at least 3 non-empty segments to have 3 adjacent identical ones
+                    for i in range(len(path_segments) - 2):
+                        # Check for 3 adjacent identical non-empty segments
+                        if path_segments[i] == path_segments[i+1] and \
+                           path_segments[i+1] == path_segments[i+2]:
+                            logger.warning(
+                                f"Skipping URL due to >2 adjacent identical path segments ('{path_segments[i]}'): {abs_url}"
+                            )
+                            continue # Skip to the next a_tag in the outer loop
+
+            # Check for excessive URL length
+            if len(abs_url) > MAX_URL_LENGTH:
+                logger.warning(f"Skipping excessively long URL ({len(abs_url)} chars): {abs_url[:150]}...") # Log a snippet
+                continue
+
+            # Check for excessive path segment repetition
+            path_segments = urlparse(abs_url).path.strip('/').split('/')
+            if len(path_segments) > 5: # Only check for longer paths
+                last_segment = path_segments[-1]
+                # Heuristic: if the last 3 segments are identical and the repeated segment is frequent
+                if last_segment and \
+                   len(path_segments) >= 3 and \
+                   path_segments[-1] == path_segments[-2] == path_segments[-3] and \
+                   path_segments.count(last_segment) > (len(path_segments) // 2):
+                    logger.warning(f"Skipping URL with likely repetitive path segments: {abs_url}")
+                    continue
+
             # Check if the URL matches any excluded patterns before adding
             excluded = False
             for pattern in EXCLUDED_URLS:
@@ -192,7 +226,34 @@ def extract_links(html, base_url):
                 links.add(abs_url)
     return links
 
-def crawl():
+def load_processed_urls_from_log(log_filepath):
+    """Loads successfully fetched URLs from a previous crawler.log file."""
+    visited = set()
+    if not os.path.exists(log_filepath):
+        logger.info(f"Restart: Log file '{log_filepath}' not found. Starting fresh.")
+        return visited
+
+    try:
+        with open(log_filepath, 'r', encoding='utf-8') as f:
+            # Regex to find lines indicating a successful fetch
+            # Example log line: "2023-10-27 10:00:00,000 - INFO - crawler.crawl - Successfully fetched: https://example.com/page"
+            # This pattern looks for "Successfully fetched: " followed by a URL.
+            success_pattern = re.compile(r"Successfully fetched: (https?://[^\s]+)")
+            for line in f:
+                match = success_pattern.search(line) # Use search as the message might be embedded
+                if match:
+                    url = match.group(1)
+                    visited.add(normalize_url(url)) # Normalize to be consistent
+        if visited:
+            logger.info(f"Restart: Loaded {len(visited)} successfully fetched URLs from log file: {log_filepath}")
+        else:
+            logger.info(f"Restart: No successfully fetched URLs found in log file: {log_filepath}. Starting fresh.")
+    except Exception as e:
+        logger.error(f"Restart: Error loading processed URLs from log '{log_filepath}': {e}. Starting fresh.")
+        return set() # Return empty set on error
+    return visited
+
+def crawl(restart_mode=False):
     global visited_urls, queue, discovered_pages_for_llms_txt, robot_rules
 
     # Initialize state for this specific crawl run
@@ -204,6 +265,10 @@ def crawl():
 
     # Initialize tqdm with MAX_PAGES as the total, it's an upper bound.
     pbar = tqdm(total=MAX_PAGES, desc="Crawling pages", unit="page")
+
+    if restart_mode:
+        visited_urls.update(load_processed_urls_from_log(LOG_FILE)) # Use LOG_FILE now
+        pbar.total = max(0, MAX_PAGES - len(visited_urls)) # Adjust tqdm total if restarting
 
     processed_pages_count = 0 # To ensure pbar doesn't update beyond MAX_PAGES
 
@@ -399,6 +464,15 @@ def parse_arguments(log_file_default_val, site_summary_default_val):
         "--details-placeholder", type=str,
         help="Text for the 'Optional details' section in llms.txt. If not set, this section will be empty."
     )
+    parser.add_argument(
+        "--restart", action="store_true",
+        help="Restart a previous crawl, skipping pages logged as 'Successfully fetched' in the existing log file."
+    )
+    parser.add_argument(
+        "--skip-adjacent-repetitive-paths", action="store_true",
+        default=SKIP_ADJACENT_REPETITIVE_PATHS_DEFAULT,
+        help="Skip URLs with more than two adjacent identical path segments (e.g., /word/word/word/). Default: False"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -442,6 +516,7 @@ if __name__ == "__main__":
     REQUEST_RETRIES = args.retries # Set global REQUEST_RETRIES from parsed args
     EXCLUDED_URLS = args.excluded_url # Set global EXCLUDED_URLS from parsed args
     MAX_PAGES = args.max_pages
+    SKIP_ADJACENT_REPETITIVE_PATHS = args.skip_adjacent_repetitive_paths
 
     # Adjust default output file extensions based on --output-type if filenames were not explicitly set
     if args.output_type != "txt":
@@ -457,7 +532,6 @@ if __name__ == "__main__":
             if old_ext_full.lower() == ".txt": # Only change if it was the .txt default
                 OUTPUT_FILE_FULL = base_full + new_extension
 
-    # Basic logging setup (can be expanded with the logging module)
     # Initial messages will go to the log file
     if args.log_level != "NONE": # This print was for immediate console feedback before logger was fully set up
         logger.info(f"Console log output level set to: {args.log_level}")
@@ -465,5 +539,5 @@ if __name__ == "__main__":
     logger.info(f"File log level set to: {logging.getLevelName(file_log_level)}")
     logger.info(f"Excluded URL patterns: {EXCLUDED_URLS if EXCLUDED_URLS else 'None'}")
     logger.info(f"Starting crawl from {BASE_URL}. Index output: {OUTPUT_FILE}, Full content output: {OUTPUT_FILE_FULL}")
-    crawl()
+    crawl(restart_mode=args.restart)
     logger.info(f"Completed! Crawled {len(visited_urls)} pages.")
