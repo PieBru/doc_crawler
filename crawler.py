@@ -10,6 +10,7 @@ import argparse
 import textwrap
 import fnmatch # Import fnmatch for wildcard matching
 import logging
+from urllib.robotparser import RobotFileParser # Moved import to top level
 
 '''
 Copyright [2025] [piebru at gmail]
@@ -77,7 +78,6 @@ discovered_pages_for_llms_txt = [] # Stores {'title': str, 'html_url': str, 'md_
 
 def get_robots_parser(domain):
     if domain not in robot_rules:
-        from urllib.robotparser import RobotFileParser  # Imported here as per original snippet
         robots_url = f"https://{domain}/robots.txt"
         parser = RobotFileParser()
         parser.set_url(robots_url)
@@ -98,7 +98,7 @@ def is_allowed(url):
 def normalize_url(url):
     # Remove fragments and normalize
     parsed = urlparse(url)
-    return parsed.scheme + "://" + parsed.netloc + parsed.path
+    return parsed.scheme + "://" + parsed.netloc.lower() + parsed.path
 
 def extract_main_content(html):
     # Readability for boilerplate removal
@@ -148,9 +148,18 @@ def check_for_md_version(html_url_str):
 
 def clean_text(text):
     # Remove excess whitespace, control characters, etc.
-    text = re.sub(r'\s+', ' ', text)  # Collapse whitespace
-    text = text.encode('ascii', 'ignore').decode('ascii').strip()  # Basic ASCII cleanup, ensuring ascii decode
-    return text
+    # 1. Remove C0 control characters (U+0000 to U+001F) and DEL (U+007F) first
+    text = re.sub(r'[\x00-\x1F\x7F]', '', text)
+    
+    # 2. Collapse multiple standard whitespace characters (space, tab, newline etc.) 
+    #    into a single space. Also, strip leading/trailing whitespace from the core content.
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip() # Strip here to clean whitespace around the core text
+    
+    # 3. Remove non-ASCII characters
+    #    If "Non-ASCII: éàçü" became "Non-ASCII: ", this step will make it "Non-ASCII: "
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    return text # No final strip, as stripping was done before non-ASCII removal
 
 def fetch_page(url):
     # Access the global REQUEST_RETRIES value, which is set from CLI or default
@@ -181,6 +190,7 @@ def extract_links(html, base_url):
     soup = BeautifulSoup(html, 'lxml')
     links = set()
     for a_tag in soup.find_all('a', href=True):
+        skip_this_link = False # Flag to signal skipping to the next a_tag
         href = a_tag['href'].split('#')[0]  # Remove anchors
         abs_url = urljoin(base_url, href)
         abs_url = normalize_url(abs_url) # Normalize after resolving
@@ -198,24 +208,29 @@ def extract_links(html, base_url):
                             logger.warning(
                                 f"Skipping URL due to >2 adjacent identical path segments ('{path_segments[i]}'): {abs_url}"
                             )
-                            continue # Skip to the next a_tag in the outer loop
+                            skip_this_link = True
+                            break # Break from inner loop (checking segments)
+            if skip_this_link:
+                continue # Skip to the next a_tag in the outer loop
 
             # Check for excessive URL length
             if len(abs_url) > MAX_URL_LENGTH:
                 logger.warning(f"Skipping excessively long URL ({len(abs_url)} chars): {abs_url[:150]}...") # Log a snippet
                 continue
+            # No need to set skip_this_link here as continue already skips to next a_tag
 
             # Check for excessive path segment repetition
             path_segments = urlparse(abs_url).path.strip('/').split('/')
-            if len(path_segments) > 5: # Only check for longer paths
-                last_segment = path_segments[-1]
+            # Filter out empty segments that might result from multiple slashes like // or leading/trailing slashes
+            path_segments_filtered = [segment for segment in path_segments if segment]
+            if len(path_segments_filtered) >= 3: # Ensure at least 3 non-empty segments
+                last_segment = path_segments_filtered[-1]
                 # Heuristic: if the last 3 segments are identical and the repeated segment is frequent
-                if last_segment and \
-                   len(path_segments) >= 3 and \
-                   path_segments[-1] == path_segments[-2] == path_segments[-3] and \
-                   path_segments.count(last_segment) > (len(path_segments) // 2):
+                if path_segments_filtered[-1] == path_segments_filtered[-2] == path_segments_filtered[-3] and \
+                   path_segments_filtered.count(last_segment) * 2 > len(path_segments_filtered): # segment > 50% of total
                     logger.warning(f"Skipping URL with likely repetitive path segments: {abs_url}")
                     continue
+            # No need to set skip_this_link here as continue already skips to next a_tag
 
             # Check if the URL matches any excluded patterns before adding
             excluded = False

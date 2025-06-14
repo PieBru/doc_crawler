@@ -1,6 +1,8 @@
 *llms.txt
 *llms-full.txt
 *.log
+*.tmp
+.coverage
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

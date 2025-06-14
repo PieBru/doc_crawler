@@ -98,6 +98,41 @@ This specification addresses challenges in AI content processing by offering a s
         --max-pages 500
     ```
 
+## Testing and Coverage
+
+This project uses Python's built-in `unittest` framework for unit tests and the `coverage` package for measuring test coverage.
+
+### Running Unit Tests
+
+1.  Navigate to the project root directory.
+2.  If you are using a virtual environment, ensure it is activated.
+3.  Run the tests using the following command:
+
+    ```bash
+    python -m unittest tests.test_crawler
+    ```
+
+### Checking Test Coverage
+
+1.  **Install `coverage`** (if you haven't already):
+    ```bash
+    pip install coverage
+    ```
+2.  **Run tests with coverage**:
+    ```bash
+    coverage run -m unittest tests.test_crawler
+    ```
+3.  **View the coverage report**:
+    *   For a quick summary in the console, including missing lines:
+        ```bash
+        coverage report -m
+        ```
+    *   For a detailed HTML report (generates an `htmlcov` directory):
+        ```bash
+        coverage html
+        ```
+        Open `htmlcov/index.html` in your browser to explore the interactive report.
+
 ## Output Files
 
 *   **`llms.txt` (or as specified by `--output-file`)**:
