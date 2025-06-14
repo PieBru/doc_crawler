@@ -8,6 +8,7 @@ import re
 import time
 import argparse
 import textwrap
+import fnmatch # Import fnmatch for wildcard matching
 import logging
 
 '''
@@ -56,6 +57,7 @@ LOG_FILE = LOG_FILE_DEFAULT
 LLMS_TXT_SITE_SUMMARY = LLMS_TXT_SITE_SUMMARY_DEFAULT # Ensure it's defined before parse_arguments if used as default
 REQUEST_DELAY = REQUEST_DELAY_DEFAULT
 MAX_PAGES = MAX_PAGES_DEFAULT
+EXCLUDED_URLS = [] # Will be populated by CLI arguments
 # REQUEST_RETRIES is defined by CLI or its default in __main__
 
 # Initialize logger
@@ -179,7 +181,15 @@ def extract_links(html, base_url):
         abs_url = urljoin(base_url, href)
         abs_url = normalize_url(abs_url) # Normalize after resolving
         if URL_PATTERN.match(abs_url) and abs_url not in visited_urls:
-            links.add(abs_url)
+            # Check if the URL matches any excluded patterns before adding
+            excluded = False
+            for pattern in EXCLUDED_URLS:
+                if fnmatch.fnmatch(abs_url, pattern):
+                    logger.info(f"Excluding link based on pattern '{pattern}': {abs_url}")
+                    excluded = True
+                    break # No need to check other patterns if one matches
+            if not excluded: # Add only if not excluded
+                links.add(abs_url)
     return links
 
 def crawl():
@@ -373,6 +383,11 @@ def parse_arguments(log_file_default_val, site_summary_default_val):
         default=REQUEST_RETRIES_DEFAULT, help="Number of retries for fetching a page in case of an error."
     )
     parser.add_argument(
+        "--excluded-url", action='append', default=[],
+        help="URL pattern (supports wildcards like *) to exclude from crawling. "
+             "Can be specified multiple times to exclude several patterns (e.g., --excluded-url \"*/api/*\" --excluded-url \"*.pdf\")."
+    )
+    parser.add_argument(
         "--site-title", type=str,
         required=True, help="Site title for the H1 in generated files (e.g., \"My Project Documentation\")."
     )
@@ -425,6 +440,7 @@ if __name__ == "__main__":
     LLMS_TXT_DETAILS_PLACEHOLDER = args.details_placeholder if args.details_placeholder is not None else ""
     REQUEST_DELAY = args.request_delay
     REQUEST_RETRIES = args.retries # Set global REQUEST_RETRIES from parsed args
+    EXCLUDED_URLS = args.excluded_url # Set global EXCLUDED_URLS from parsed args
     MAX_PAGES = args.max_pages
 
     # Adjust default output file extensions based on --output-type if filenames were not explicitly set
@@ -442,9 +458,12 @@ if __name__ == "__main__":
                 OUTPUT_FILE_FULL = base_full + new_extension
 
     # Basic logging setup (can be expanded with the logging module)
-    if args.log_level != "NONE":
-        print(f"Log level set to: {args.log_level}") # Placeholder for actual logging setup
-
-    print(f"Starting crawl from {BASE_URL}. Index output: {OUTPUT_FILE}, Full content output: {OUTPUT_FILE_FULL}")
+    # Initial messages will go to the log file
+    if args.log_level != "NONE": # This print was for immediate console feedback before logger was fully set up
+        logger.info(f"Console log output level set to: {args.log_level}")
+    logger.info(f"Detailed logs will be written to: {LOG_FILE}")
+    logger.info(f"File log level set to: {logging.getLevelName(file_log_level)}")
+    logger.info(f"Excluded URL patterns: {EXCLUDED_URLS if EXCLUDED_URLS else 'None'}")
+    logger.info(f"Starting crawl from {BASE_URL}. Index output: {OUTPUT_FILE}, Full content output: {OUTPUT_FILE_FULL}")
     crawl()
-    print(f"Completed! Crawled {len(visited_urls)} pages.")
+    logger.info(f"Completed! Crawled {len(visited_urls)} pages.")
