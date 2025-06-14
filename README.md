@@ -50,7 +50,9 @@ to crawl the entire site.
 ## Output Files
 
 *   **`llms.txt` (or as specified by `--output-file`)**:
+*   
     An index file in Markdown format. Contains the site title, summary, optional details, and a list of links to discovered pages.
+
     ```markdown
     # [Site Title]
 
@@ -66,7 +68,8 @@ to crawl the entire site.
     ```
 
 *   **`llms-full.txt` (or as specified by `--output-file-full`)**:
-    A comprehensive Markdown file containing the full content of discovered pages.
+*   A comprehensive Markdown file containing the full content of discovered pages.
+    More details here: [What the heck is "llms-full.txt" ?](README_wth_is_llms-full.md)
     ```markdown
     # [Site Title]
 
