@@ -34,6 +34,7 @@ BASE_URL = "https://llmstxt.org/"  # Root URL of documentation
 URL_PATTERN_DEFAULT_STRING = r'^https?://llmstxt\.org/' # Default as string for argparse
 OUTPUT_FILE_DEFAULT = "llms.txt"
 OUTPUT_FILE_FULL_DEFAULT = "llms-full.txt" # For full content embedding
+OUTPUT_DIRECTORY_DEFAULT_BASE = "./output" # Base for default output directory
 LOG_FILE_DEFAULT = "crawler.log"
 USER_AGENT_DEFAULT = "DocsCrawler/1.0 (+https://llmstxt.org/crawler)"
 #USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"
@@ -54,6 +55,7 @@ URL_PATTERN = re.compile(URL_PATTERN_DEFAULT_STRING)
 OUTPUT_FILE = OUTPUT_FILE_DEFAULT
 OUTPUT_FILE_FULL = OUTPUT_FILE_FULL_DEFAULT
 USER_AGENT = USER_AGENT_DEFAULT
+OUTPUT_DIRECTORY = "" # Will be determined in __main__
 LOG_FILE = LOG_FILE_DEFAULT
 LLMS_TXT_SITE_SUMMARY = LLMS_TXT_SITE_SUMMARY_DEFAULT # Ensure it's defined before parse_arguments if used as default
 REQUEST_DELAY = REQUEST_DELAY_DEFAULT
@@ -423,6 +425,10 @@ def parse_arguments(log_file_default_val, site_summary_default_val):
         default=OUTPUT_FILE_FULL_DEFAULT, help="Name for the llms-full.txt content file."
     )
     parser.add_argument(
+        "--output-directory", type=str,
+        help=f"Directory to store output files. Default: {OUTPUT_DIRECTORY_DEFAULT_BASE}/<fqdn_of_base_url>/"
+    )
+    parser.add_argument(
         "--output-type", type=str,
         default="txt", choices=["txt", "md", "json", "xml"],
         help="Desired output type. Affects default file extensions if --output-file/--output-file-full are not set. (Content generation for json/xml not yet implemented)"
@@ -506,15 +512,32 @@ if __name__ == "__main__":
     URL_PATTERN = re.compile(args.url_pattern)
     LLMS_TXT_SITE_TITLE = args.site_title
 
+    # Determine and create output directory
+    if args.output_directory:
+        OUTPUT_DIRECTORY = args.output_directory
+    else:
+        try:
+            fqdn = urlparse(BASE_URL).netloc
+            if not fqdn: # Should not happen with a valid BASE_URL
+                fqdn = "unknown_site"
+            OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY_DEFAULT_BASE, fqdn)
+        except Exception as e:
+            logger.error(f"Could not parse FQDN from BASE_URL '{BASE_URL}': {e}. Using default output base.")
+            OUTPUT_DIRECTORY = OUTPUT_DIRECTORY_DEFAULT_BASE
+    
+    os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
+    logger.info(f"Output directory set to: {os.path.abspath(OUTPUT_DIRECTORY)}")
+
     # Set optional configurations from CLI arguments or their initial defaults
-    OUTPUT_FILE = args.output_file
-    OUTPUT_FILE_FULL = args.output_file_full
+    OUTPUT_FILE = os.path.join(OUTPUT_DIRECTORY, args.output_file)
+    OUTPUT_FILE_FULL = os.path.join(OUTPUT_DIRECTORY, args.output_file_full)
     USER_AGENT = args.user_agent
+    LOG_FILE = os.path.join(OUTPUT_DIRECTORY, args.log_file) # Update LOG_FILE path
     LLMS_TXT_SITE_SUMMARY = args.site_summary
     LLMS_TXT_DETAILS_PLACEHOLDER = args.details_placeholder if args.details_placeholder is not None else ""
     REQUEST_DELAY = args.request_delay
-    REQUEST_RETRIES = args.retries # Set global REQUEST_RETRIES from parsed args
-    EXCLUDED_URLS = args.excluded_url # Set global EXCLUDED_URLS from parsed args
+    REQUEST_RETRIES = args.retries 
+    EXCLUDED_URLS = args.excluded_url 
     MAX_PAGES = args.max_pages
     SKIP_ADJACENT_REPETITIVE_PATHS = args.skip_adjacent_repetitive_paths
 
