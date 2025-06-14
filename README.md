@@ -188,4 +188,4 @@ Contributions are welcome! Please feel free to fork the repository, make changes
 
 ## License
 
-This project is licensed under the Apache License 2.0. See the `LICENSE` file for details (if one exists in your project).
+This project is licensed under the Apache License 2.0. See the `LICENSE` file for details.
