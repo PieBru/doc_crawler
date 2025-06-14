@@ -8,7 +8,7 @@ import re
 import time
 import argparse
 import textwrap
-import logging # Import the logging module
+import logging
 
 '''
 Copyright [2025] [piebru at gmail]
