@@ -1,3 +1,4 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 from readability import Document
@@ -7,6 +8,7 @@ import re
 import time
 import argparse
 import textwrap
+import logging # Import the logging module
 
 '''
 Copyright [2025] [piebru at gmail]
@@ -31,31 +33,33 @@ BASE_URL = "https://llmstxt.org/"  # Root URL of documentation
 URL_PATTERN_DEFAULT_STRING = r'^https?://llmstxt\.org/' # Default as string for argparse
 OUTPUT_FILE_DEFAULT = "llms.txt"
 OUTPUT_FILE_FULL_DEFAULT = "llms-full.txt" # For full content embedding
+LOG_FILE_DEFAULT = "crawler.log"
 USER_AGENT_DEFAULT = "DocsCrawler/1.0 (+https://llmstxt.org/crawler)"
 #USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1500.52 Safari/537.36"
 LLMS_TXT_SITE_TITLE = "LLMs.txt Project" # Customize this: H1 Title for llms.txt
-LLMS_TXT_SITE_SUMMARY = "Guidance for LLMs on how to best use this site's content." # Customize this: Blockquote summary
+LLMS_TXT_SITE_SUMMARY_DEFAULT = "Guidance for LLMs on how to best use this site's content." # Customize this: Blockquote summary
 LLMS_TXT_DETAILS_PLACEHOLDER = (
     "You can add more detailed information about the project or how to interpret the files here. "
     "This section can contain paragraphs, lists, etc., but no H2 or lower headings."
 )
 REQUEST_DELAY_DEFAULT = 1  # Seconds between requests (avoid overloading servers)
-MAX_PAGES_DEFAULT = 1000  # Safety limit
+MAX_PAGES_DEFAULT = 1000 # Maximum number of pages to crawl
+REQUEST_RETRIES = 3  # Safety limit
+REQUEST_RETRIES_DEFAULT = 3 # Number of retries for fetching a page
 
 # These will be populated by defaults or CLI arguments
 URL_PATTERN = re.compile(URL_PATTERN_DEFAULT_STRING)
 OUTPUT_FILE = OUTPUT_FILE_DEFAULT
 OUTPUT_FILE_FULL = OUTPUT_FILE_FULL_DEFAULT
 USER_AGENT = USER_AGENT_DEFAULT
+LOG_FILE = LOG_FILE_DEFAULT
+LLMS_TXT_SITE_SUMMARY = LLMS_TXT_SITE_SUMMARY_DEFAULT # Ensure it's defined before parse_arguments if used as default
 REQUEST_DELAY = REQUEST_DELAY_DEFAULT
 MAX_PAGES = MAX_PAGES_DEFAULT
+# REQUEST_RETRIES is defined by CLI or its default in __main__
 
-#BASE_URL = "https://docs.agno.com/"  # Root URL of documentation
-#URL_PATTERN = re.compile(r'^https?://docs\.agno\.com/')  # Regex to match doc URLs
-#OUTPUT_FILE = "docs.agno.com_llms.txt"
-#OUTPUT_FILE_FULL = "docs.agno.com_llms-full.txt"
-#LLMS_TXT_SITE_TITLE = "Agno Documentation" # Customize this: H1 Title for llms.txt
-#LLMS_TXT_SITE_SUMMARY = "An overview of the Agno documentation, providing quick access to key resources." # Customize this: Blockquote summary
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # Global state that persists across calls (e.g. for caching robots.txt)
 robot_rules = {}  # {domain: RobotFileParser object}
@@ -74,8 +78,7 @@ def get_robots_parser(domain):
         try:
             parser.read()
         except Exception as e:
-            # Silently ignore robots.txt read errors, or add logging
-            print(f"Warning: Could not fetch or parse robots.txt for {domain}: {e}")
+            logger.warning(f"Could not fetch or parse robots.txt for {domain}: {e}")
         robot_rules[domain] = parser
     return robot_rules[domain]
 
@@ -96,7 +99,7 @@ def extract_main_content(html):
     doc = Document(html)
     return BeautifulSoup(doc.summary(), 'lxml').get_text(separator=' ', strip=True)
 
-def extract_title_from_html(html_content):
+def extract_title_from_html(html_content, html_url_str=None): # Add optional url parameter
     if not html_content:
         return None
     try:
@@ -105,8 +108,8 @@ def extract_title_from_html(html_content):
         if title_tag and title_tag.string:
             # Normalize whitespace and strip
             return re.sub(r'\s+', ' ', title_tag.string).strip()
-    except Exception as e:
-        # print(f"Warning: Could not extract title: {e}") # Optional: for debugging
+    except Exception as e: # Capture the exception to log it
+        logger.debug(f"Could not extract title from a page (URL: {html_url_str if html_url_str else 'unknown'}): {e}")
         pass
     return None
 
@@ -144,17 +147,29 @@ def clean_text(text):
     return text
 
 def fetch_page(url):
-    try:
-        headers = {'User-Agent': USER_AGENT}
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        return resp.text
-    except requests.exceptions.RequestException as e: # More specific exception
-        print(f"Error fetching {url}: {str(e)}")
-        return None
-    except Exception as e: # Generic fallback
-        print(f"Unexpected error fetching {url}: {str(e)}")
-        return None
+    # Access the global REQUEST_RETRIES value, which is set from CLI or default
+    global REQUEST_RETRIES
+    
+    for attempt in range(REQUEST_RETRIES + 1): # +1 because 0 retries means 1 attempt
+        try:
+            headers = {'User-Agent': USER_AGENT}
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()  # Raises HTTPError for bad responses (4XX or 5XX)
+            return resp.text
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching {url} (Attempt {attempt + 1}/{REQUEST_RETRIES + 1}): {str(e)}")
+            if attempt < REQUEST_RETRIES:
+                time.sleep(REQUEST_DELAY * (attempt + 1)) # Simple backoff, or just REQUEST_DELAY
+            else:
+                logger.error(f"All {REQUEST_RETRIES + 1} attempts to fetch {url} failed.")
+                return None
+        except Exception as e: # Generic fallback for unexpected errors
+            logger.error(f"Unexpected error fetching {url} (Attempt {attempt + 1}): {str(e)}")
+            # Decide if you want to retry on generic exceptions or not
+            # For now, we'll return None for non-RequestExceptions after the first try
+            return None
+    # Should not be reached if loop logic is correct, but as a fallback:
+    return None
 
 def extract_links(html, base_url):
     soup = BeautifulSoup(html, 'lxml')
@@ -190,6 +205,7 @@ def crawl():
         if not is_allowed(url):
             # Optionally, add to visited_urls here to prevent re-checking robots.txt
             # visited_urls.add(url) 
+            logger.info(f"Skipped (robots.txt): {url}")
             # tqdm.write(f"Skipped (robots.txt): {url}") # For logging without breaking bar
             continue
 
@@ -198,12 +214,14 @@ def crawl():
 
         html = fetch_page(url)
         if not html:
+            logger.warning(f"Fetch returned no HTML for {url} after retries.")
             time.sleep(REQUEST_DELAY) # Still delay if fetch failed
             continue
+        logger.info(f"Successfully fetched: {url}")
 
         # --- Content Acquisition for llms.txt and llms-full.txt ---
-        page_title = extract_title_from_html(html) or url # Fallback to URL if title extraction fails
-        md_url = check_for_md_version(url)
+        page_title = extract_title_from_html(html, url) or url # Pass URL for logging context
+        md_url = check_for_md_version(url) # This function also uses USER_AGENT
         content_for_full_txt = ""
         page_content_source_type = "" # 'md', 'html', or empty
 
@@ -212,6 +230,9 @@ def crawl():
             if raw_md_content:
                 content_for_full_txt = raw_md_content.replace('\r\n', '\n').strip() # Keep as Markdown
                 page_content_source_type = 'md'
+                logger.info(f"Using Markdown content from {md_url}")
+            else:
+                logger.warning(f"Failed to fetch Markdown content from {md_url}, will try HTML from original URL.")
 
         if not content_for_full_txt and html: # Fallback to HTML if MD failed or not present
             # extract_main_content uses readability and gets plain text
@@ -219,6 +240,7 @@ def crawl():
             # Further whitespace normalization
             content_for_full_txt = re.sub(r'\s+', ' ', main_html_text_content).strip()
             page_content_source_type = 'html'
+            logger.info(f"Using extracted HTML content from {url}")
         
         discovered_pages_for_llms_txt.append({
             'title': page_title, 'html_url': url, 'md_url': md_url,
@@ -283,7 +305,7 @@ def crawl():
                 else:
                     outfile_full.write("(Content not available or fetch failed for this page)\n\n")
 
-def parse_arguments():
+def parse_arguments(log_file_default_val, site_summary_default_val):
     epilog_text = textwrap.dedent(r"""\
     Example usage:
       Crawl llmstxt.org (default configuration if these match):
@@ -331,6 +353,10 @@ def parse_arguments():
         help="Desired output type. Affects default file extensions if --output-file/--output-file-full are not set. (Content generation for json/xml not yet implemented)"
     )
     parser.add_argument(
+        "--log-file", type=str,
+        default=log_file_default_val, help="Name for the log file."
+    )
+    parser.add_argument(
         "--user-agent", type=str,
         default=USER_AGENT_DEFAULT, help="User-Agent string for crawling."
     )
@@ -343,12 +369,16 @@ def parse_arguments():
         default=MAX_PAGES_DEFAULT, help="Maximum number of pages to crawl."
     )
     parser.add_argument(
+        "--retries", type=int,
+        default=REQUEST_RETRIES_DEFAULT, help="Number of retries for fetching a page in case of an error."
+    )
+    parser.add_argument(
         "--site-title", type=str,
         required=True, help="Site title for the H1 in generated files (e.g., \"My Project Documentation\")."
     )
     parser.add_argument(
         "--site-summary", type=str,
-        default=LLMS_TXT_SITE_SUMMARY, help="Site summary for the blockquote in llms.txt."
+        default=site_summary_default_val, help="Site summary for the blockquote in llms.txt."
     )
     parser.add_argument(
         "--details-placeholder", type=str,
@@ -357,7 +387,30 @@ def parse_arguments():
     return parser.parse_args()
 
 if __name__ == "__main__":
-    args = parse_arguments()
+    args = parse_arguments(LOG_FILE_DEFAULT, LLMS_TXT_SITE_SUMMARY_DEFAULT) # Pass defaults
+
+    # --- Setup Logging ---
+    log_level_str = args.log_level.upper()
+    numeric_log_level = getattr(logging, log_level_str, logging.INFO) # Default to INFO if invalid
+
+    # Configure file handler
+    LOG_FILE = args.log_file # Set global LOG_FILE from args
+    file_handler = logging.FileHandler(LOG_FILE, mode='w', encoding='utf-8') # Overwrite log file each run
+    
+    # Determine the effective log level for the file handler
+    # If console is NONE, file still logs at least INFO. Otherwise, use the specified level.
+    file_log_level = numeric_log_level
+    if log_level_str == "NONE":
+        file_log_level = logging.INFO 
+
+    file_handler.setLevel(file_log_level)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(module)s.%(funcName)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    # Configure the logger (used throughout the script)
+    logger.addHandler(file_handler)
+    # Set logger's own level to the most verbose of its handlers or the desired level
+    logger.setLevel(min(file_log_level, logging.DEBUG)) # Allow DEBUG messages if handler is set to DEBUG
 
     # Set mandatory configurations from CLI arguments
     BASE_URL = args.base_url
@@ -371,6 +424,7 @@ if __name__ == "__main__":
     LLMS_TXT_SITE_SUMMARY = args.site_summary
     LLMS_TXT_DETAILS_PLACEHOLDER = args.details_placeholder if args.details_placeholder is not None else ""
     REQUEST_DELAY = args.request_delay
+    REQUEST_RETRIES = args.retries # Set global REQUEST_RETRIES from parsed args
     MAX_PAGES = args.max_pages
 
     # Adjust default output file extensions based on --output-type if filenames were not explicitly set
@@ -386,9 +440,6 @@ if __name__ == "__main__":
             base_full, old_ext_full = os.path.splitext(OUTPUT_FILE_FULL)
             if old_ext_full.lower() == ".txt": # Only change if it was the .txt default
                 OUTPUT_FILE_FULL = base_full + new_extension
-
-    # Import os for path.splitext if not already imported (it's not in the provided snippet)
-    import os
 
     # Basic logging setup (can be expanded with the logging module)
     if args.log_level != "NONE":
